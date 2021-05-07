@@ -12,16 +12,17 @@ from spotify_dl.spotify import validate_spotify_url
 from spotipy.oauth2 import SpotifyClientCredentials
 from pathlib import Path, PurePath
 from dotenv import load_dotenv
+from mp3_tagger import MP3File, VERSION_1, VERSION_2, VERSION_BOTH
 
 
 class SpotifyDownloader:
     def __init__(self):
         ########### Ziel Ordner ###############
-        self.result_dir = "/home/jannik/Musik/Test"
+        self.result_dir = "C:/Users/Jannik/Desktop/musicTest"
         #######################################
 
         ########### Playlist URL ##############
-        self.url = "https://open.spotify.com/playlist/372BtTHHZohugO714p8mzK?si=cd675169d7724f95"
+        self.url = "https://open.spotify.com/playlist/372BtTHHZohugO714p8mzK?si=42758acddf57416b"
         #######################################
 
         load_dotenv(".env")
@@ -61,7 +62,12 @@ class SpotifyDownloader:
 
         for file in items:
             if " myfreemp3.vip " in file:
-                os.rename(path + "/" + file, path + "/" + file.replace(" myfreemp3.vip ", ""))
+                file = file.strip()
+                new_file = path + "/" + file.replace(" myfreemp3.vip ", "")
+                if not os.path.isfile(new_file):
+                    os.rename(path + "/" + file, new_file)
+                else:
+                    os.remove(path + "/" + file)
 
     def get_homepage(self):
         try:
@@ -83,6 +89,8 @@ class SpotifyDownloader:
             if q in downloaded_tracks:
                 print(q + " is already downloaded!")
                 continue
+            else:
+                print("downloading " + q)
 
             self.get_homepage()
 
@@ -135,6 +143,45 @@ class SpotifyDownloader:
             except WebDriverException:
                 print("WebDriverException!!")
 
+    def set_metadata(self, dir):
+        files = os.listdir(dir)
+        artist = ""
+        song = ""
+        #mp3 = MP3File("C:/Users/Jannik/Desktop/musicTest/DownloadTest/Insurge - I'll Be There.mp3")
+
+        for file in files:
+            if ".mp3" in file:
+                path = os.path.join(dir, file)
+                splitted = file.replace(".mp3", "").strip().split(" - ")
+                artist = splitted[0]
+                song = splitted[1]
+                print("ARTIST: " + artist)
+                print("SONG: " + song)
+
+                #try:
+                mp3 = MP3File(path)
+                mp3.set_version(VERSION_1)
+
+                del mp3.artist
+                del mp3.song
+                mp3.artist = artist
+                mp3.song = song
+
+                del mp3.album
+                del mp3.comment
+                del mp3.band
+                del mp3.composer
+                del mp3.copyright
+                del mp3.url
+                del mp3.publisher
+                del mp3.track
+                del mp3.genre
+                del mp3.year
+
+                mp3.save()
+                #except Exception as err:
+                 #   print("Error while editing metatags!")
+
     def create_browser(self):
         ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.90 Safari/537.36"
 
@@ -159,7 +206,7 @@ class SpotifyDownloader:
         })
         # options.add_experimental_option('prefs', prefs)
 
-        self.driver = webdriver.Chrome("/usr/bin/chromedriver", options=options)
+        self.driver = webdriver.Chrome("C:/Users/Jannik/AppData/Local/Programs/Python/Python39/chromedriver.exe", options=options)
 
         self.driver.set_window_position(3000, 0)
         self.driver.maximize_window()
@@ -175,8 +222,17 @@ class SpotifyDownloader:
         dl_links = self.get_dl_links(songs, downloaded_tracks)
 
         self.download_from_links(dl_links)
+        print("Download completed! Renaming...")
+
+        sleep(15)
 
         self.rename_files(self.dl_path)
+
+        print("Renaming finished!")
+
+        self.set_metadata(self.dl_path)
+
+        print("Setting Metadata finished!")
 
     def tear_down(self):
         self.driver.quit()

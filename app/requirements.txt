@@ -3,4 +3,5 @@ spotify-dl
 python-dotenv
 pathlib
 selenium
+mp3-tagger
 
