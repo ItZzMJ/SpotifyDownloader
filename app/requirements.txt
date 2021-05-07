@@ -1,0 +1,6 @@
+soundcloud-dl
+spotify-dl
+python-dotenv
+pathlib
+selenium
+
