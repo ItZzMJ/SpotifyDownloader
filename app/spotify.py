@@ -1,18 +1,21 @@
 import os
 from pprint import pprint
 from time import sleep
+from mutagen.mp3 import HeaderNotFoundError
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import WebDriverException, TimeoutException, ElementClickInterceptedException, \
-    NoSuchFrameException
+    NoSuchFrameException, StaleElementReferenceException, NoSuchElementException
 from spotify_dl import spotify
 import spotipy
 from spotify_dl.spotify import validate_spotify_url
 from spotipy.oauth2 import SpotifyClientCredentials
 from pathlib import Path, PurePath
 from dotenv import load_dotenv
-from mp3_tagger import MP3File, VERSION_1, VERSION_2, VERSION_BOTH
+import music_tag
+from mutagen.mp3 import MP3
+import urllib.request
 
 
 class SpotifyDownloader:
@@ -22,7 +25,7 @@ class SpotifyDownloader:
         #######################################
 
         ########### Playlist URL ##############
-        self.url = "https://open.spotify.com/playlist/372BtTHHZohugO714p8mzK?si=42758acddf57416b"
+        self.url = "https://open.spotify.com/playlist/6zK6D0YigFUc0ClcBEUAy0?si=01983811d566458e"
         #######################################
 
         load_dotenv(".env")
@@ -50,24 +53,50 @@ class SpotifyDownloader:
     def check_dir(self, path):
         items = os.listdir(path)
         downloaded_tracks = []
+        song = ""
+        artist = ""
 
         for file_name in items:
-            song = file_name.replace(" myfreemp3.vip ", "").replace(".mp3", "")
-            downloaded_tracks.append(song)
+            file_path = os.path.join(path, file_name)
+
+            try:
+                mp3 = music_tag.load_file(file_path)
+                song = mp3['title'].value
+                artist = mp3['artist'].value
+
+            except HeaderNotFoundError:
+                print("MP3 Corrupted!")
+            except NotImplementedError:
+                print("Not Impltemented Error for: ")
+                print(file_path)
+
+            downloaded_tracks.append(artist + " - " + song)
 
         return downloaded_tracks
 
-    def rename_files(self, path):
-        items = os.listdir(path)
+    # def rename_files(self, path, songs):
+    #     items = os.listdir(path)
+    #
+    #     for file in items:
+    #         if " myfreemp3.vip " in file:
+    #             splitted = file.split(" - ")
+    #             new_file = ""
+    #
+    #             for song in songs:
+    #                 if song['name'] in splitted[1] and song['artist'] in splitted[0]:
+    #                     new_file = path + "/" + song['artist'] + " - " + song['name']
+    #                     os.rename(path + "/" + file, new_file)
+    #
+    #             if new_file == "":
+    #                 print(file + " was not found in songs")
 
-        for file in items:
-            if " myfreemp3.vip " in file:
-                file = file.strip()
-                new_file = path + "/" + file.replace(" myfreemp3.vip ", "")
-                if not os.path.isfile(new_file):
-                    os.rename(path + "/" + file, new_file)
-                else:
-                    os.remove(path + "/" + file)
+                # if " myfreemp3.vip " in file:
+                #     file = file.strip()
+                #     new_file = path + "/" + file.replace(" myfreemp3.vip ", "")
+                #     if not os.path.isfile(new_file):
+                #         os.rename(path + "/" + file, new_file)
+                #     else:
+                #         os.remove(path + "/" + file)
 
     def get_homepage(self):
         try:
@@ -76,6 +105,63 @@ class SpotifyDownloader:
             print("No Website!! Exiting..")
             exit(-1)
 
+    def get_dl_button(self, q):
+        driver = self.driver
+        request_not_found = "/html/body/div[2]/div[2]/div[2]/li"
+        dbutton = ""
+
+        try:
+            input_elem = WebDriverWait(driver, 2).until(
+                lambda driver: driver.find_element_by_id("query"))
+
+            input_elem.send_keys(q)
+            input_elem.send_keys(Keys.RETURN)
+            # dbutton = WebDriverWait(driver, 3).until(
+            #     lambda driver: driver.find_element_by_xpath(download_button1))
+
+            list_entries = WebDriverWait(driver, 3).until(
+                lambda driver: driver.find_elements_by_css_selector("#result > div.list-group > li"))
+
+        except TimeoutException:
+            try:
+                error_elem = WebDriverWait(driver, 3).until(
+                    lambda driver: driver.find_element_by_xpath(request_not_found))
+            except TimeoutException:
+                driver.refresh()
+                sleep(1)
+                return dbutton
+            else:
+                print("No Song found!! " + q)
+                return "skip"
+        else:
+
+            i = 0
+            for entry in list_entries:
+                try:
+                    size_button = entry.find_element_by_class_name("dropdown-toggle")
+                    size_button.click()
+                    sleep(2)
+                except NoSuchElementException:
+                    continue
+
+                try:
+                    size_elem = driver.find_elements_by_class_name("info-link")[i]
+                except StaleElementReferenceException:
+                    print("Element is not Attached to the side!")
+                    print(entry.tag_name)
+                    print(entry.text)
+                    exit(-5)
+                i += 1
+
+                if "NaN kB" in size_elem.text:
+                    size_button.click()
+                    continue
+                else:
+                    dbutton = driver.find_elements_by_partial_link_text("Download")[i]
+                    break
+
+        return dbutton
+
     def get_dl_links(self, songs, downloaded_tracks):
         driver = self.driver
         dl_links = []
@@ -83,6 +169,8 @@ class SpotifyDownloader:
         success = False
         download_button1 = "/html/body/div[2]/div[2]/div[2]/li/div/a[3]"
         download_button2 = "/html/body/div[2]/div/div[1]/button"
+        song_array = {}
+        id = 0
 
         for song in songs:
             q = song['artist'] + " - " + song['name']
@@ -90,30 +178,21 @@ class SpotifyDownloader:
                 print(q + " is already downloaded!")
                 continue
             else:
-                print("downloading " + q)
+                print("getting " + q)
 
             self.get_homepage()
 
             count = 0
 
             while True:
-                if count >= 3:
+                if count >= 5:
                     break
                 else:
-                    try:
-                        input_elem = WebDriverWait(driver, 3).until(
-                            lambda driver: driver.find_element_by_id("query"))
-
-                        input_elem.send_keys(q)
-                        input_elem.send_keys(Keys.RETURN)
-                        dbutton = WebDriverWait(driver, 6).until(
-                            lambda driver: driver.find_element_by_xpath(download_button1))
-                    except TimeoutException:
-                        driver.refresh()
-                        count += 1
-                        sleep(1)
-                    else:
+                    dbutton = self.get_dl_button(q)
+                    if dbutton != "":
                         break
+                    else:
+                        count += 1
 
             try:
                 link = dbutton.get_attribute("onclick").replace("window.open(\'", "").replace("\',\'_blank\');", "")
@@ -131,56 +210,52 @@ class SpotifyDownloader:
             else:
                 download_link = dbutton2.get_attribute("onclick").replace("window.open(\'", "")\
                     .replace("\',\'_blank\');", "")
-                dl_links.append(download_link)
-        return dl_links
 
-    def download_from_links(self, links):
+                song_array[id] = {'dlink': download_link, 'song': song}
+                id += 1
+        return song_array
+
+    def replace_chars(self, string, chars):
+        for char in chars:
+            string = string.replace(char, "")
+        return string
+
+    def download_from_links(self, song_array):
         driver = self.driver
-        for link in links:
-            try:
-                sleep(1)
-                driver.get(link)
-            except WebDriverException:
-                print("WebDriverException!!")
+        for key in song_array:
+            item = song_array[key]
 
-    def set_metadata(self, dir):
-        files = os.listdir(dir)
-        artist = ""
-        song = ""
-        #mp3 = MP3File("C:/Users/Jannik/Desktop/musicTest/DownloadTest/Insurge - I'll Be There.mp3")
+            url = item['dlink']
+            song = item['song']
+            file_name = self.replace_chars(song['artist'] + " - " + song['name'] + ".mp3", "<>:\"/\\|?*")
 
-        for file in files:
-            if ".mp3" in file:
-                path = os.path.join(dir, file)
-                splitted = file.replace(".mp3", "").strip().split(" - ")
-                artist = splitted[0]
-                song = splitted[1]
-                print("ARTIST: " + artist)
-                print("SONG: " + song)
+            song_path = os.path.join(self.dl_path, file_name)
 
-                #try:
-                mp3 = MP3File(path)
-                mp3.set_version(VERSION_1)
+            print("downloading: " + song_path)
 
-                del mp3.artist
-                del mp3.song
-                mp3.artist = artist
-                mp3.song = song
+            urllib.request.urlretrieve(url, song_path)
 
-                del mp3.album
-                del mp3.comment
-                del mp3.band
-                del mp3.composer
-                del mp3.copyright
-                del mp3.url
-                del mp3.publisher
-                del mp3.track
-                del mp3.genre
-                del mp3.year
+            print("download finished! Setting metadata..")
 
-                mp3.save()
-                #except Exception as err:
-                 #   print("Error while editing metatags!")
+            self.set_metadata(song_path, song)
+            sleep(1)
+
+    def set_metadata(self, song_path, song):
+        try:
+            mp3 = music_tag.load_file(song_path)
+            mp3['title'] = song['name']
+            mp3['artist'] = song['artist']
+            mp3['genre'] = song['genre']
+            mp3['year'] = song['year']
+            mp3['album'] = song['album']
+            del mp3['tracknumber']
+            mp3.save()
+
+        except HeaderNotFoundError as err:
+            print(err)
+            print("Corrupted MP3!! deleting...:")
+            print(song_path)
+            os.remove(song_path)
 
     def create_browser(self):
         ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.90 Safari/537.36"
@@ -219,20 +294,10 @@ class SpotifyDownloader:
 
         self.create_browser()
 
-        dl_links = self.get_dl_links(songs, downloaded_tracks)
+        song_array = self.get_dl_links(songs, downloaded_tracks)
 
-        self.download_from_links(dl_links)
-        print("Download completed! Renaming...")
-
+        self.download_from_links(song_array)
         sleep(15)
-
-        self.rename_files(self.dl_path)
-
-        print("Renaming finished!")
-
-        self.set_metadata(self.dl_path)
-
-        print("Setting Metadata finished!")
 
     def tear_down(self):
         self.driver.quit()
