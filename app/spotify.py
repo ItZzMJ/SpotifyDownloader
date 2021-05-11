@@ -1,6 +1,12 @@
+import json
 import os
+import traceback
+from json import JSONDecodeError
+from os.path import isfile
 from pprint import pprint
 from time import sleep
+
+from Tools.scripts.ndiff import fopen
 from mutagen.mp3 import HeaderNotFoundError
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
@@ -16,17 +22,15 @@ from dotenv import load_dotenv
 import music_tag
 from mutagen.mp3 import MP3
 import urllib.request
+import PySimpleGUI as sg
+import requests
 
 
 class SpotifyDownloader:
     def __init__(self):
-        ########### Ziel Ordner ###############
-        self.result_dir = "C:/Users/Jannik/Desktop/musicTest"
-        #######################################
-
-        ########### Playlist URL ##############
-        self.url = "https://open.spotify.com/playlist/6zK6D0YigFUc0ClcBEUAy0?si=01983811d566458e"
-        #######################################
+        settings = self.load_settings()
+        self.result_dir = settings['result_dir']
+        self.url = settings['url']
 
         load_dotenv(".env")
         self.dl_path = ""
@@ -40,11 +44,11 @@ class SpotifyDownloader:
         valid_item = validate_spotify_url(url)
 
         item_type, item_id = spotify.parse_spotify_url(url)
-        directory_name = spotify.get_item_name(self.sp, item_type, item_id)
+        directory_name = spotify.get_item_name(self.sp, item_type, item_id).replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
         save_path = Path(PurePath.joinpath(Path(self.result_dir), Path(directory_name)))
         save_path.mkdir(parents=True, exist_ok=True)
         self.dl_path = str(save_path)
-        print("Saving Songs to " + self.dl_path)
+        print("[LOG] Saving Songs to " + self.dl_path)
 
         songs = spotify.fetch_tracks(self.sp, item_type, url)
 
@@ -65,44 +69,20 @@ class SpotifyDownloader:
                 artist = mp3['artist'].value
 
             except HeaderNotFoundError:
-                print("MP3 Corrupted!")
+                print("[ERR] MP3 Corrupted!")
             except NotImplementedError:
-                print("Not Impltemented Error for: ")
+                print("[ERR] Not Impltemented Error for: ")
                 print(file_path)
 
             downloaded_tracks.append(artist + " - " + song)
 
         return downloaded_tracks
 
-    # def rename_files(self, path, songs):
-    #     items = os.listdir(path)
-    #
-    #     for file in items:
-    #         if " myfreemp3.vip " in file:
-    #             splitted = file.split(" - ")
-    #             new_file = ""
-    #
-    #             for song in songs:
-    #                 if song['name'] in splitted[1] and song['artist'] in splitted[0]:
-    #                     new_file = path + "/" + song['artist'] + " - " + song['name']
-    #                     os.rename(path + "/" + file, new_file)
-    #
-    #             if new_file == "":
-    #                 print(file + " was not found in songs")
-
-                # if " myfreemp3.vip " in file:
-                #     file = file.strip()
-                #     new_file = path + "/" + file.replace(" myfreemp3.vip ", "")
-                #     if not os.path.isfile(new_file):
-                #         os.rename(path + "/" + file, new_file)
-                #     else:
-                #         os.remove(path + "/" + file)
-
     def get_homepage(self):
         try:
             self.driver.get(self.website)
         except WebDriverException:
-            print("No Website!! Exiting..")
+            print("[ERR] No Website!! Exiting..")
             exit(-1)
 
     def get_dl_button(self, q):
@@ -131,7 +111,7 @@ class SpotifyDownloader:
                 sleep(1)
                 return dbutton
             else:
-                print("No Song found!! " + q)
+                print("[LOG] No Song found!! " + q)
                 return "skip"
         else:
 
@@ -147,7 +127,7 @@ class SpotifyDownloader:
                 try:
                     size_elem = driver.find_elements_by_class_name("info-link")[i]
                 except StaleElementReferenceException:
-                    print("Element is not Attached to the side!")
+                    print("[ERR] Element is not Attached to the side!")
                     print(entry.tag_name)
                     print(entry.text)
                     exit(-5)
@@ -175,10 +155,10 @@ class SpotifyDownloader:
         for song in songs:
             q = song['artist'] + " - " + song['name']
             if q in downloaded_tracks:
-                print(q + " is already downloaded!")
+                print("[LOG] " + q + " is already downloaded!")
                 continue
             else:
-                print("getting " + q)
+                print("[LOG] Getting " + q)
 
             self.get_homepage()
 
@@ -197,8 +177,8 @@ class SpotifyDownloader:
             try:
                 link = dbutton.get_attribute("onclick").replace("window.open(\'", "").replace("\',\'_blank\');", "")
             except Exception as e:
-                print("No Download link found for " + q)
-                print("Error: {0}".format(e))
+                print("[LOG] No Download link found for " + q)
+                print("[ERR] Error: {0}".format(e))
                 continue
 
             try:
@@ -206,13 +186,15 @@ class SpotifyDownloader:
                 dbutton2 = WebDriverWait(driver, 6).until(
                     lambda driver: driver.find_element_by_xpath(download_button2))
             except TimeoutException:
-                print("No Download Button! for " + q)
+                print("[ERR] No Download Button! for " + q)
             else:
-                download_link = dbutton2.get_attribute("onclick").replace("window.open(\'", "")\
+                download_link = dbutton2.get_attribute("onclick").replace("window.open(\'", "") \
                     .replace("\',\'_blank\');", "")
 
                 song_array[id] = {'dlink': download_link, 'song': song}
                 id += 1
+                self.update_progress_bar()
+
         return song_array
 
     def replace_chars(self, string, chars):
@@ -231,14 +213,17 @@ class SpotifyDownloader:
 
             song_path = os.path.join(self.dl_path, file_name)
 
-            print("downloading: " + song_path)
+            print("[LOG] Downloading: " + song_path)
 
             urllib.request.urlretrieve(url, song_path)
 
-            print("download finished! Setting metadata..")
+            print("[LOG] Download finished! Setting metadata..")
+            self.update_progress_bar()
 
             self.set_metadata(song_path, song)
             sleep(1)
+        print("<-------------- Download completed! Fasching Mafensen -------------->")
+        self.update_progress_bar(True)
 
     def set_metadata(self, song_path, song):
         try:
@@ -252,12 +237,10 @@ class SpotifyDownloader:
             mp3.save()
 
         except HeaderNotFoundError as err:
-            print(err)
-            print("Corrupted MP3!! deleting...:")
-            print(song_path)
+            print("[ERR] Corrupted MP3!! deleting...:" + song)
             os.remove(song_path)
 
-    def create_browser(self):
+    def create_browser(self, show_chrome=False):
         ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.90 Safari/537.36"
 
         options = webdriver.ChromeOptions()
@@ -268,8 +251,11 @@ class SpotifyDownloader:
         options.add_argument('--ignore-ssl-errors')
         options.add_argument("--disable-notifications")
         options.add_argument('--disable-dev-shm-usage')
-        # options.add_argument("--headless")
-        # options.add_argument("--disable-gpu")
+
+        if not show_chrome:
+            options.add_argument("--headless")
+            options.add_argument("--disable-gpu")
+
         # options.add_argument('--allow-insecure-localhost')
 
         options.add_experimental_option("prefs", {
@@ -279,33 +265,146 @@ class SpotifyDownloader:
             "safebrowsing_for_trusted_sources_enabled": False,
             "safebrowsing.enabled": False
         })
-        # options.add_experimental_option('prefs', prefs)
 
-        self.driver = webdriver.Chrome("C:/Users/Jannik/AppData/Local/Programs/Python/Python39/chromedriver.exe", options=options)
+        self.driver = webdriver.Chrome("C:/Users/Jannik/AppData/Local/Programs/Python/Python39/chromedriver.exe",
+                                       options=options)
 
         self.driver.set_window_position(3000, 0)
         self.driver.maximize_window()
 
+    def update_progress_bar(self, complete):
+        if complete:
+            max = self.progress_bar.TKProgressBar.Max
+            self.progress_bar.update_bar(max)
+        else:
+            count = self.progress_bar.TKProgressBar.TKProgressBarForReal['value']
+            self.progress_bar.update_bar(count + 1)
+        self.window.refresh()
+
+    def load_settings(self):
+        file = "settings.json"
+        f = open(file, "r+")
+        try:
+            settings = json.load(f)
+        except JSONDecodeError:
+            print("[ERR] Error while reading settings! Check file!")
+            settings = {'result_dir': '', 'url': ''}
+        finally:
+            f.close()
+
+        return settings
+
+    def save_settings(self, result_dir, url):
+        file = "settings.json"
+
+        if isfile(file):
+            os.remove(file)
+
+        settings = {'result_dir': result_dir, 'url': url}
+
+        try:
+            f = open(file, "w+")
+            json.dump(settings, f)
+        finally:
+            f.close()
+
     def run(self):
-        url = self.url
-        songs = self.get_songs(url)
+        self.window = self.make_window('dark grey 9')
+        try:
 
-        downloaded_tracks = self.check_dir(self.dl_path)
+            while True:
+                event, values = self.window.read()
 
-        self.create_browser()
+                if event == sg.WINDOW_CLOSED or event == 'Exit':
+                    break
 
-        song_array = self.get_dl_links(songs, downloaded_tracks)
+                elif event == 'Download':
+                    self.window['-OUTPUT-'].Update('')
+                    if not values['-FOLDER-']:
+                        print("[ERR] Keinen Zielordner angegeben!")
 
-        self.download_from_links(song_array)
-        sleep(15)
+                    elif not values['-LINK-']:
+                        print("[ERR] Keinen Playlistlink angegeben!")
+
+                    else:
+                        show_chrome = values['-SHOWCHROME-']
+                        self.result_dir = values['-FOLDER-']
+                        self.url = values['-LINK-']
+
+                        self.save_settings(self.result_dir, self.url)
+
+                        self.progress_bar = self.window['-PROGRESS BAR-']
+
+                        songs = self.get_songs(self.url)
+
+                        downloaded_tracks = self.check_dir(self.dl_path)
+
+                        song_count = len(songs) - len(downloaded_tracks)
+
+                        self.progress_bar.update_bar(1, song_count*2)
+
+
+                        try:
+                            self.create_browser(show_chrome)
+
+                            song_array = self.get_dl_links(songs, downloaded_tracks)
+
+                            self.download_from_links(song_array)
+                        finally:
+                            self.tear_down()
+
+        finally:
+            print("[LOG] Exiting..")
+            #self.window.close()
 
     def tear_down(self):
         self.driver.quit()
+
+    def make_window(self, theme):
+        sg.theme(theme)
+
+        dir_input = [
+            sg.Text("Zielordner auswählen"),
+            sg.In(size=(90, 10), enable_events=True, key="-FOLDER-", default_text=self.result_dir),
+            sg.FolderBrowse()
+        ]
+
+        link_input = [
+            sg.Text("Playlistlink eingeben"),
+            sg.In(size=(90, 10), enable_events=True, key="-LINK-", default_text=self.url),
+        ]
+
+        output = [
+            sg.Output(size=(110, 30), background_color='white', text_color='black', key='-OUTPUT-')
+        ]
+
+        sg.SetOptions(progress_meter_color=('green', 'white'))
+        progress_bar = [
+            sg.ProgressBar(1000, orientation='h', size=(72, 20), key='-PROGRESS BAR-')
+        ]
+
+        buttons = [
+            sg.Button('Exit'),
+            sg.Checkbox('show Chrome', pad=((550, 0), 0), default=False, key='-SHOWCHROME-'),
+            sg.Button('Download', pad=((50, 0), 0)),
+        ]
+
+        layout = [
+            [dir_input],
+            [link_input],
+            [output],
+            [progress_bar],
+            [buttons]
+        ]
+
+        return sg.Window("Spotify Downloader", layout)
 
 
 if __name__ == '__main__':
     sd = SpotifyDownloader()
     try:
         sd.run()
-    finally:
-        sd.tear_down()
+    except Exception as err:
+        tb = traceback.format_exc()
+        print(err)
+        print(tb)
