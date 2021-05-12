@@ -22,6 +22,7 @@ from mutagen.mp3 import MP3
 import urllib.request
 import PySimpleGUI as sg
 import requests
+import threading
 
 
 class SpotifyDownloader:
@@ -100,6 +101,7 @@ class SpotifyDownloader:
             input_elem = WebDriverWait(driver, 2).until(
                 lambda driver: driver.find_element_by_id("query"))
 
+            input_elem.clear()
             input_elem.send_keys(q)
             input_elem.send_keys(Keys.RETURN)
             # dbutton = WebDriverWait(driver, 3).until(
@@ -163,6 +165,62 @@ class SpotifyDownloader:
                     self.debug.append("[ERR] Error: {0}".format(e))
 
         return dbutton
+
+    def get_dl_link(self, song, downloaded_tracks):
+        driver = self.driver
+        dbutton = ""
+        success = False
+        download_button1 = "/html/body/div[2]/div[2]/div[2]/li/div/a[3]"
+        download_button2 = "/html/body/div[2]/div/div[1]/button"
+
+        q = song['artist'] + " - " + song['name']
+        if q in downloaded_tracks:
+            print("[LOG] " + q + " is already downloaded!")
+            self.debug.append("[LOG] " + q + " is already downloaded!")
+            return ""
+        else:
+            print("[LOG] Getting " + q)
+            self.debug.append("[LOG] Getting " + q)
+
+        self.get_homepage()
+
+        count = 0
+
+        while True:
+            if count >= 5:
+                break
+            else:
+                dbutton = self.get_dl_button(q)
+                if dbutton != "":
+                    break
+                else:
+                    count += 1
+
+        try:
+            link = dbutton.get_attribute("onclick").replace("window.open(\'", "").replace("\',\'_blank\');", "")
+        except Exception as e:
+            print("[LOG] No Download link found for " + q)
+            self.debug.append("[LOG] No Download link found for " + q)
+            return ""
+
+        try:
+            driver.get(link)
+            dbutton2 = WebDriverWait(driver, 6).until(
+                lambda driver: driver.find_element_by_xpath(download_button2))
+        except TimeoutException as e:
+            print("[ERR] No Download Button! for " + q)
+            self.debug.append("[ERR] No Download Button! for " + q)
+            self.debug.append("[ERR] Error: {0}".format(e))
+            return ""
+
+        else:
+            download_link = dbutton2.get_attribute("onclick").replace("window.open(\'", "") \
+                .replace("\',\'_blank\');", "")
+
+            item = {'dlink': download_link, 'song': song}
+            self.update_progress_bar(False)
+
+        return item
 
     def get_dl_links(self, songs, downloaded_tracks):
         driver = self.driver
@@ -232,28 +290,49 @@ class SpotifyDownloader:
             string = string.replace(char, "")
         return string
 
+    def download_from_link(self, item):
+        driver = self.driver
+        url = item['dlink']
+        song = item['song']
+        file_name = self.replace_chars(song['artist'] + " - " + song['name'] + ".mp3", "<>:\"/\\|?*")
+
+        song_path = os.path.join(self.dl_path, file_name)
+
+        print("[LOG] Downloading: " + song_path)
+        self.debug.append("[LOG] Downloading: " + song_path)
+
+        urllib.request.urlretrieve(url, song_path)
+
+        print("[LOG] Download finished! Setting metadata..")
+        self.debug.append("[LOG] Download finished! Setting metadata..")
+        self.update_progress_bar(False)
+
+        self.set_metadata(song_path, song)
+        sleep(1)
+
     def download_from_links(self, song_array):
         driver = self.driver
         for key in song_array:
             item = song_array[key]
+            self.download_from_link(item)
 
-            url = item['dlink']
-            song = item['song']
-            file_name = self.replace_chars(song['artist'] + " - " + song['name'] + ".mp3", "<>:\"/\\|?*")
-
-            song_path = os.path.join(self.dl_path, file_name)
-
-            print("[LOG] Downloading: " + song_path)
-            self.debug.append("[LOG] Downloading: " + song_path)
-
-            urllib.request.urlretrieve(url, song_path)
-
-            print("[LOG] Download finished! Setting metadata..")
-            self.debug.append("[LOG] Download finished! Setting metadata..")
-            self.update_progress_bar(False)
-
-            self.set_metadata(song_path, song)
-            sleep(1)
+            # url = item['dlink']
+            # song = item['song']
+            # file_name = self.replace_chars(song['artist'] + " - " + song['name'] + ".mp3", "<>:\"/\\|?*")
+            #
+            # song_path = os.path.join(self.dl_path, file_name)
+            #
+            # print("[LOG] Downloading: " + song_path)
+            # self.debug.append("[LOG] Downloading: " + song_path)
+            #
+            # urllib.request.urlretrieve(url, song_path)
+            #
+            # print("[LOG] Download finished! Setting metadata..")
+            # self.debug.append("[LOG] Download finished! Setting metadata..")
+            # self.update_progress_bar(False)
+            #
+            # self.set_metadata(song_path, song)
+            # sleep(1)
         print("<-------------- Download completed! Fasching Mafensen -------------->")
         self.debug.append("<-------------- Download completed! Fasching Mafensen -------------->")
         self.update_progress_bar(True)
@@ -353,7 +432,6 @@ class SpotifyDownloader:
     def run(self):
         self.window = self.make_window('dark grey 9')
         try:
-
             while True:
                 event, values = self.window.read()
 
@@ -386,13 +464,21 @@ class SpotifyDownloader:
 
                         self.progress_bar.update_bar(1, song_count*2)
 
-
                         try:
                             self.create_browser(show_chrome)
 
-                            song_array = self.get_dl_links(songs, downloaded_tracks)
+                            for song in songs:
+                                dl_link = self.get_dl_link(song, downloaded_tracks)
+                                if dl_link != "":
+                                    self.download_from_link(dl_link)
 
-                            self.download_from_links(song_array)
+                            print("<-------------- Download completed! Fasching Mafensen -------------->")
+                            self.debug.append("<-------------- Download completed! Fasching Mafensen -------------->")
+                            self.update_progress_bar(True)
+
+                            #song_array = self.get_dl_links(songs, downloaded_tracks)
+                            #self.download_from_links(song_array)
+
                         finally:
                             self.tear_down()
         except Exception as e:
