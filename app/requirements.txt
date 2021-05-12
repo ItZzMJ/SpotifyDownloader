@@ -4,4 +4,5 @@ python-dotenv
 pathlib
 selenium
 music-tag
-
+PySimpleGUI
+tkinter

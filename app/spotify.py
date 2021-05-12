@@ -5,8 +5,6 @@ from json import JSONDecodeError
 from os.path import isfile
 from pprint import pprint
 from time import sleep
-
-from Tools.scripts.ndiff import fopen
 from mutagen.mp3 import HeaderNotFoundError
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
@@ -32,6 +30,8 @@ class SpotifyDownloader:
         self.result_dir = settings['result_dir']
         self.url = settings['url']
 
+        self.debug = []
+
         load_dotenv(".env")
         self.dl_path = ""
 
@@ -49,6 +49,7 @@ class SpotifyDownloader:
         save_path.mkdir(parents=True, exist_ok=True)
         self.dl_path = str(save_path)
         print("[LOG] Saving Songs to " + self.dl_path)
+        self.debug.append("[LOG] Saving Songs to " + self.dl_path)
 
         songs = spotify.fetch_tracks(self.sp, item_type, url)
 
@@ -70,9 +71,13 @@ class SpotifyDownloader:
 
             except HeaderNotFoundError:
                 print("[ERR] MP3 Corrupted!")
-            except NotImplementedError:
+                self.debug.append("[ERR] MP3 Corrupted!")
+            except NotImplementedError as e:
                 print("[ERR] Not Impltemented Error for: ")
+                self.debug.append("[ERR] Not Impltemented Error for: ")
                 print(file_path)
+                self.debug.append(file_path)
+                self.debug.append("[ERR] Error: {0}".format(e))
 
             downloaded_tracks.append(artist + " - " + song)
 
@@ -83,6 +88,7 @@ class SpotifyDownloader:
             self.driver.get(self.website)
         except WebDriverException:
             print("[ERR] No Website!! Exiting..")
+            self.debug.append("[ERR] No Website!! Exiting..")
             exit(-1)
 
     def get_dl_button(self, q):
@@ -112,6 +118,7 @@ class SpotifyDownloader:
                 return dbutton
             else:
                 print("[LOG] No Song found!! " + q)
+                self.debug.append("[LOG] No Song found!! " + q)
                 return "skip"
         else:
 
@@ -126,19 +133,34 @@ class SpotifyDownloader:
 
                 try:
                     size_elem = driver.find_elements_by_class_name("info-link")[i]
-                except StaleElementReferenceException:
+                except StaleElementReferenceException as e:
                     print("[ERR] Element is not Attached to the side!")
+                    self.debug.append("[ERR] Element is not Attached to the side!")
                     print(entry.tag_name)
+                    self.debug.append(entry.tag_name)
                     print(entry.text)
+                    self.debug.append(entry.text)
+                    self.debug.append("[ERR] Error: {0}".format(e))
                     exit(-5)
+
+                except IndexError as e:
+                    print("[ERR] Index Error while getting size_elem!")
+                    self.debug.append("[ERR] Index Error while getting size_elem!")
+                    self.debug.append("[ERR] Error: {0}".format(e))
+
                 i += 1
 
-                if "NaN kB" in size_elem.text:
-                    size_button.click()
-                    continue
-                else:
-                    dbutton = driver.find_elements_by_partial_link_text("Download")[i]
-                    break
+                try:
+                    if "NaN kB" in size_elem.text:
+                        size_button.click()
+                        continue
+                    else:
+                        dbutton = driver.find_elements_by_partial_link_text("Download")[i]
+                        break
+                except Exception as e:
+                    print("[ERR] No attribute text")
+                    self.debug.append("[ERR] No attribute text")
+                    self.debug.append("[ERR] Error: {0}".format(e))
 
         return dbutton
 
@@ -156,9 +178,11 @@ class SpotifyDownloader:
             q = song['artist'] + " - " + song['name']
             if q in downloaded_tracks:
                 print("[LOG] " + q + " is already downloaded!")
+                self.debug.append("[LOG] " + q + " is already downloaded!")
                 continue
             else:
                 print("[LOG] Getting " + q)
+                self.debug.append("[LOG] Getting " + q)
 
             self.get_homepage()
 
@@ -178,22 +202,28 @@ class SpotifyDownloader:
                 link = dbutton.get_attribute("onclick").replace("window.open(\'", "").replace("\',\'_blank\');", "")
             except Exception as e:
                 print("[LOG] No Download link found for " + q)
+                self.debug.append("[LOG] No Download link found for " + q)
                 print("[ERR] Error: {0}".format(e))
+                self.debug.append("[ERR] Error: {0}".format(e))
                 continue
 
             try:
                 driver.get(link)
                 dbutton2 = WebDriverWait(driver, 6).until(
                     lambda driver: driver.find_element_by_xpath(download_button2))
-            except TimeoutException:
+            except TimeoutException as e:
                 print("[ERR] No Download Button! for " + q)
+                self.debug.append("[ERR] No Download Button! for " + q)
+
+                self.debug.append("[ERR] Error: {0}".format(e))
+
             else:
                 download_link = dbutton2.get_attribute("onclick").replace("window.open(\'", "") \
                     .replace("\',\'_blank\');", "")
 
                 song_array[id] = {'dlink': download_link, 'song': song}
                 id += 1
-                self.update_progress_bar()
+                self.update_progress_bar(False)
 
         return song_array
 
@@ -214,15 +244,18 @@ class SpotifyDownloader:
             song_path = os.path.join(self.dl_path, file_name)
 
             print("[LOG] Downloading: " + song_path)
+            self.debug.append("[LOG] Downloading: " + song_path)
 
             urllib.request.urlretrieve(url, song_path)
 
             print("[LOG] Download finished! Setting metadata..")
-            self.update_progress_bar()
+            self.debug.append("[LOG] Download finished! Setting metadata..")
+            self.update_progress_bar(False)
 
             self.set_metadata(song_path, song)
             sleep(1)
         print("<-------------- Download completed! Fasching Mafensen -------------->")
+        self.debug.append("<-------------- Download completed! Fasching Mafensen -------------->")
         self.update_progress_bar(True)
 
     def set_metadata(self, song_path, song):
@@ -237,7 +270,10 @@ class SpotifyDownloader:
             mp3.save()
 
         except HeaderNotFoundError as err:
-            print("[ERR] Corrupted MP3!! deleting...:" + song)
+            print("[ERR] Corrupted MP3!! deleting...:" + song['artist'] + " - " + song['name'])
+            self.debug.append("[ERR] Corrupted MP3!! deleting...:" + song['artist'] + " - " + song['name'])
+            self.debug.append("[ERR] Error: {0}".format(err))
+
             os.remove(song_path)
 
     def create_browser(self, show_chrome=False):
@@ -266,7 +302,7 @@ class SpotifyDownloader:
             "safebrowsing.enabled": False
         })
 
-        self.driver = webdriver.Chrome("C:/Users/Jannik/AppData/Local/Programs/Python/Python39/chromedriver.exe",
+        self.driver = webdriver.Chrome("/usr/bin/chromedriver",
                                        options=options)
 
         self.driver.set_window_position(3000, 0)
@@ -283,11 +319,17 @@ class SpotifyDownloader:
 
     def load_settings(self):
         file = "settings.json"
+        if not os.path.isfile(file):
+            return {'result_dir': '', 'url': ''}
+
         f = open(file, "r+")
         try:
             settings = json.load(f)
-        except JSONDecodeError:
+        except JSONDecodeError as e:
             print("[ERR] Error while reading settings! Check file!")
+            self.debug.append("[ERR] Error while reading settings! Check file!")
+            self.debug.append("[ERR] Error: {0}".format(e))
+
             settings = {'result_dir': '', 'url': ''}
         finally:
             f.close()
@@ -322,9 +364,10 @@ class SpotifyDownloader:
                     self.window['-OUTPUT-'].Update('')
                     if not values['-FOLDER-']:
                         print("[ERR] Keinen Zielordner angegeben!")
+                        self.debug.append("[ERR] Keinen Zielordner angegeben!")
 
                     elif not values['-LINK-']:
-                        print("[ERR] Keinen Playlistlink angegeben!")
+                        self.debug.append("[ERR] Keinen Playlistlink angegeben!")
 
                     else:
                         show_chrome = values['-SHOWCHROME-']
@@ -352,13 +395,28 @@ class SpotifyDownloader:
                             self.download_from_links(song_array)
                         finally:
                             self.tear_down()
+        except Exception as e:
+            tb = traceback.format_exc()
+            self.debug.append(tb)
 
         finally:
             print("[LOG] Exiting..")
-            #self.window.close()
+            self.debug.append("[LOG] Exiting..")
+            self.window['-OUTPUT-'].__del__()
+            self.window.close()
 
     def tear_down(self):
         self.driver.quit()
+
+    def print_debug(self):
+        os.remove("debug.txt")
+        i = 0
+        f = open("debug.txt", "a+")
+        for message in self.debug:
+            print("[" + str(i) + "] " + message)
+            f.write("[" + str(i) + "] " + message + "\n")
+            i += 1
+        f.close()
 
     def make_window(self, theme):
         sg.theme(theme)
@@ -408,3 +466,7 @@ if __name__ == '__main__':
         tb = traceback.format_exc()
         print(err)
         print(tb)
+        sd.tear_down()
+    finally:
+        sd.tear_down()
+        sd.print_debug()
